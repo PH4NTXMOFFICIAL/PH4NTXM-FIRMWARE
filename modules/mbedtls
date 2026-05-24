@@ -1,0 +1,21 @@
+modules-$(CONFIG_MBEDTLS) += mbedtls
+
+mbedtls_version := 2.4.2
+mbedtls_dir := mbedtls-$(mbedtls_version)
+mbedtls_tar := mbedtls-$(mbedtls_version).tar.gz
+mbedtls_url := https://github.com/ARMmbed/mbedtls/archive/$(mbedtls_tar)
+mbedtls_hash := b7afab6a0f86e29c6055848b70d183c4e2531cb0ec955b66c0e4e1b7e4954bf4
+
+mbedtls_libraries := library/libmbedcrypto.so.0
+
+mbedtls_configure :=
+
+mbedtls_target := \
+	SHARED=1 \
+	CFLAGS="-Os"  \
+	DESTDIR=$(INSTALL) \
+	$(CROSS_TOOLS) \
+	$(MAKE_JOBS) \
+	install
+
+mbedtls_depends := $(musl_dep)

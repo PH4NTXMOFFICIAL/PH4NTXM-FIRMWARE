@@ -1,0 +1,420 @@
+ifeq "$(CONFIG_COREBOOT)" "y"
+
+CONFIG_COREBOOT_ROM			?= coreboot.rom
+CONFIG_COREBOOT_BOOTBLOCK	?=
+
+ifeq "$(CONFIG_TARGET_ARCH)" "x86"
+	COREBOOT_TARGET := i386
+	LINUX_IMAGE_FILE := bzImage
+	COREBOOT_TARGET_CROSS :=
+else ifeq "$(CONFIG_TARGET_ARCH)" "ppc64"
+	COREBOOT_TARGET := ppc64
+	LINUX_IMAGE_FILE := zImage
+	# skiboot payload needs the Heads toolchain as it is little-endian (like
+	# Linux), but coreboot is big-endian on PPC64.
+	COREBOOT_TARGET_CROSS := CROSS=$(CROSS)
+else
+	$(error "$(CONFIG_TARGET_ARCH) target is not supported by this module")
+endif
+
+# Each coreboot version is defined as a separate module, but only the needed
+# modules become dependencies of the current board.  One coreboot version is
+# selected for the toolchain build and firmware build.  These can be the same
+# (when using a coreboot release) or different (when using a fork that reuses a
+# release's toolchain).
+
+# Define a coreboot module.  Parameters:
+# $1 - module version
+# $2 - toolchain coreboot version - if nonempty, uses the toolchain from this
+#      version (use for forks to avoid building extra copies of the same
+#      toolchain)
+#
+# For a coreboot release:
+# - the version is the coreboot release version
+# - set coreboot-<version>_hash to the tarball hash
+# - set coreboot-blobs-<version>_hash to the blobs tarball hash
+#
+# For a git fork:
+# - the version is the name of the fork (just controls the build directory used)
+# - set coreboot-<version>_repo to the git repo address
+# - set coreboot-<version>_commit_hash to the git commit
+define coreboot_module =
+	coreboot-$(1)_version := $(1)
+	coreboot-$(1)_module_file := coreboot
+	coreboot-$(1)_base_dir := coreboot-$(1)
+	coreboot-$(1)_dir := coreboot-$(1)/$(BOARD)
+	coreboot-$(1)_toolchain := $(2)
+	# These are ignored if this version is a git fork
+	coreboot-$(1)_tar := coreboot-$(1).tar.xz
+	coreboot-$(1)_url := https://www.coreboot.org/releases/coreboot-$(1).tar.xz
+	# These are only used for releases, git forks don't use upstream blobs
+	coreboot-blobs-$(1)_version := $(1)
+	coreboot-blobs-$(1)_module_file := coreboot
+	coreboot-blobs-$(1)_dir := coreboot-$(1)/3rdparty
+	coreboot-blobs-$(1)_tar := coreboot-blobs-$(1).tar.xz
+	coreboot-blobs-$(1)_url := https://www.coreboot.org/releases/coreboot-blobs-$(1).tar.xz
+	coreboot-blobs-$(1)_tar_opt := --strip 2
+endef
+
+# coreboot releases
+
+coreboot-4.11_hash := 97fd859b4c39a25534fe33c30eb86e54a233952e08a024c55858d11598a8ad87
+coreboot-blobs-4.11_hash := aa7855c5bd385b3360dadc043ea6bc93f564e6e4840d9b3ee5b9e696bbd055db
+$(eval $(call coreboot_module,4.11,))
+# The coreboot 4.11 toolchain disables the Ada compiler.  None of the 4.11 boards need
+# libgfxinit, and the old Ada compiler no longer compiles with the Debian 12 host toolchain.
+coreboot-4.11_toolchain_build_args := BUILD_LANGUAGES=c
+
+coreboot-4.20.1_hash := b41539a8c2eab2fec752157eb4acbd0e2a637a7203530c12e66b43a5c3c3a931
+coreboot-blobs-4.20.1_hash := 30f9d8618e78d483d0903976982485e70825ca3469efd17902c9246aaefd7c4a
+$(eval $(call coreboot_module,4.20.1,))
+
+coreboot-4.22.01_hash := 3d1a36dfb2a654133c7f36cf4da436f0d79f535644069adfe7cdcad962532c3f
+coreboot-blobs-4.22.01_hash := 4bb98f1a1cc8b3c7004a1d720462bfff0fe34a9106163df2708b952bddfc5203
+$(eval $(call coreboot_module,4.22.01,))
+
+coreboot-24.02.01_hash := e56f5c0c9008bfdec1c4be6409ac093680140f9441efd3d5e47bdeffcbf77e50
+coreboot-blobs-24.02.01_hash := 8d03b82cd2b2593473d4cd511c7bef7fdd43839237f6c37a8383161660c14427
+$(eval $(call coreboot_module,24.02.01,))
+
+coreboot-24.12_hash := dd211bdd914509aea7526348db13cf8b809acd0e2214da6c6b008975f04587ed
+coreboot-blobs-24.12_hash := e75a788fa4910d48c42e9997ff55f27aaa06dc2999bab9b60483172ea587e7c0
+$(eval $(call coreboot_module,24.12,))
+
+coreboot-25.03_hash := 9182f84c0bf869cb97601594edd50f5891e97b9dc34c0e158bce2cf9ed51175a
+coreboot-blobs-25.03_hash := 03e8f565f73b932f942f08f0058d37080e1d2b0ce866596c25e607d14d1e95f0
+$(eval $(call coreboot_module,25.03,))
+
+# coreboot git forks
+
+# talos_2 could use the 4.20.1 toolchain, but it's the only ppc64 fork, so
+# there is no point preparing another coreboot module that won't be shared with
+# anything.
+coreboot-talos_2_repo := https://github.com/Dasharo/coreboot
+coreboot-talos_2_commit_hash := fc47236e9877f4113dfcce07fa928f52d4d2c8ee
+$(eval $(call coreboot_module,talos_2,))
+
+# coreboot-purism: builds its own complete toolchain
+# (util/crossgcc/sum/ matches upstream 24.02.01, but purism is the only
+#  maintained/CI consumer of that toolchain -- sharing would add bandwidth
+#  without saving any crossgcc builds.  Unmaintained boards using 24.02.01
+#  exist under unmaintained_boards/ but are not built in CI.)
+coreboot-purism_repo := https://source.puri.sm/firmware/coreboot.git
+coreboot-purism_commit_hash := bea9947a1279be7d4a72b38a601d0288d10d1cb8
+$(eval $(call coreboot_module,purism,))
+
+# Dasharo forks - all from github.com/dasharo/coreboot
+#
+# IMPORTANT: "Buildstack" means two separate things:
+#   1. CROSSGCC = the compiler (GCC/binutils/clang/nasm/llvm).
+#      This is what we share across forks. It is a tool like /usr/bin/gcc:
+#      it compiles whatever C code you give it, regardless of FSP headers.
+#   2. FSP BLOBS = Intel firmware blobs + headers (3rdparty/dasharo-blobs/).
+#      These are INPUTS to the compiler, not part of the compiler itself.
+#      Each board still uses its own fork's FSP blobs when building its ROM.
+#
+# Why the old comment said "CANNOT share":
+#   The original comment confused "board ROMs differ" with "toolchains differ".
+#   Different FSP blobs mean board A's ROM can't run on board B. That's true.
+#   But the COMPILER used to build those ROMs is the same: all use gcc-14.2.0,
+#   binutils-2.43.1, clang-18.1.8 from identical source tarballs built with
+#   identical buildgcc scripts (zero diff in util/crossgcc/ across all forks).
+#
+# Evidence:
+#   - util/crossgcc/sum/ files are byte-identical (same source packages)
+#   - util/crossgcc/ build scripts are byte-identical (same build options)
+#   - util/crossgcc/ has zero references to dasharo-blobs/ or FSP headers
+#   - All 8 Dasharo boards build successfully using the shared compiler
+#   - Each board's .config still has its own fork-specific FSP options
+#
+# Toolchain sharing: dasharo_nv4x is the toolchain provider.  dasharo_v56,
+# dasharo_msi_z690, and dasharo_msi_z790 consume its crossgcc via the second
+# coreboot_module() argument.  No separate "common" module needed since the
+# crossgcc packages are identical across all forks -- a second git clone of the
+# same repo+commit for toolchain-only purposes would waste bandwidth.
+#
+# CI: .circleci/config.yml "Dasharo shared toolchain" section
+#  - novacustom-nv4x_adl [seed:coreboot-24.12] is the x86_coreboot seed
+#  - v560tu, z690a_ddr4, z790p_ddr4 are build jobs (no cache)
+#  - All other Dasharo boards depend on novacustom-nv4x_adl
+# Doc: doc/circleci.md "Dasharo shared toolchain" section
+#  - Cache model, job types, and FSP explanation
+#
+# If you add/remove a Dasharo fork here, update:
+#   1. .circleci/config.yml workflow (seed vs build job)
+#   2. doc/circleci.md seed-board list and Dasharo cluster section
+#
+# Re-verify when any Dasharo fork rebases upstream:
+#   diff -r build/x86/coreboot-dasharo_nv4x/util/crossgcc/sum/ \
+#          build/x86/coreboot-dasharo_NEW/util/crossgcc/sum/
+
+# NovaCustom V560TU/V540TU (Meteor Lake) -- consumes nv4x toolchain
+#  Tag: novacustom_v56x_mtl_igpu_v1.0.1 (SHA: 6de027d1)
+coreboot-dasharo_v56_repo := https://github.com/dasharo/coreboot
+coreboot-dasharo_v56_commit_hash := 6de027d1f0a62753182237ce3d793e5ba0395139
+$(eval $(call coreboot_module,dasharo_v56,dasharo_nv4x))
+coreboot-dasharo_v56_patch_version := unreleased
+
+# NovaCustom NV4x ADL / NitroPad NS50 -- toolchain provider for all Dasharo
+#  Tag: novacustom_nv4x_adl_v1.8.0 (SHA: 281a7fec)
+coreboot-dasharo_nv4x_repo := https://github.com/dasharo/coreboot
+coreboot-dasharo_nv4x_commit_hash := 281a7fec1a1e7aed781b12a096c2fc0f87dc51b5
+$(eval $(call coreboot_module,dasharo_nv4x,))
+
+# MSI Z790 boards -- consumes nv4x toolchain
+#  Tag: msi_ms7e06_v0.9.4 (SHA: a5a05f13)
+coreboot-dasharo_msi_z790_repo := https://github.com/dasharo/coreboot
+coreboot-dasharo_msi_z790_commit_hash := a5a05f133471c0463609631b599cdd88a623561f
+$(eval $(call coreboot_module,dasharo_msi_z790,dasharo_nv4x))
+
+# MSI Z690 boards -- consumes nv4x toolchain
+#  Tag: msi_ms7d25_v1.1.6 (SHA: be7d58da)
+coreboot-dasharo_msi_z690_repo := https://github.com/dasharo/coreboot
+coreboot-dasharo_msi_z690_commit_hash := be7d58dac9365d8981dbb1f5c6bbbcce35df8636
+$(eval $(call coreboot_module,dasharo_msi_z690,dasharo_nv4x))
+
+# T480 is based on coreboot ~25.09 release
+#  coreboot 25.09 doesn't include Thunderbolt support and support of the lower USB-C port which is still under review at https://review.coreboot.org/c/coreboot/+/75286 and https://review.coreboot.org/c/coreboot/+/88490
+#   TODO: track upstream WiP and switch to later upstream release containing patchset without relaying on libreboot downstream maintained patchset
+# Therefore, patches/coreboot-25.09 include upstream patches to provide Thunderbolt/full USB-C support for the T480
+#  patches/coreboot-25.09 also includes PR0 patchset, minus xeon support which don't apply to 25.09 as per https://review.coreboot.org/c/coreboot/+/85278
+#   TODO: @miczyg1 rebase of patchset so that doenstream don't have to maintain, adapt work
+coreboot-25.09_repo := https://github.com/coreboot/coreboot
+coreboot-25.09_commit_hash := 07df08836eca9dd755cc32b6d78727760d201605
+$(eval $(call coreboot_module,25.09,))
+
+# Check that the board configured the coreboot version correctly
+ifeq "$(CONFIG_COREBOOT_VERSION)" ""
+	$(error "$(BOARD): does not specify coreboot version under CONFIG_COREBOOT_VERSION")
+else ifeq "$(coreboot-$(CONFIG_COREBOOT_VERSION)_dir)" ""
+	$(error "$(BOARD): coreboot version $(CONFIG_COREBOOT_VERSION) not known")
+endif
+
+coreboot_module := coreboot-$(CONFIG_COREBOOT_VERSION)
+modules-y += $(coreboot_module)
+# Don't make everyone type $($(coreboot_module)_dir)
+coreboot_dir := $($(coreboot_module)_dir)
+coreboot_base_dir := $($(coreboot_module)_base_dir)
+
+$(coreboot_module)_depends += $(if $(CONFIG_PURISM_BLOBS), purism-blobs)
+$(coreboot_module)_depends += $(if $(CONFIG_DASHARO_EC), dasharo-ec)
+
+# coreboot builds are specialized on a per-target basis.
+# The builds are done in a per-target subdirectory
+CONFIG_COREBOOT_CONFIG ?= config/coreboot-$(BOARD).config
+CONFIG_COREBOOT_LOCALVERSION ?= "$(BRAND_NAME)-$(HEADS_GIT_VERSION)"
+CONFIG_COREBOOT_SMBIOS_PRODUCT_NAME ?= $(BOARD)
+
+# Ensure that touching the config file or initrd will force a rebuild
+$(build)/$(coreboot_dir)/.configured: $(CONFIG_COREBOOT_CONFIG) $(build)/$(BOARD)/initrd.cpio.xz
+
+# Select the coreboot version to use for the toolchain
+ifeq "$($(coreboot_module)_toolchain)" ""
+# Use the same module
+coreboot_toolchain_module := $(coreboot_module)
+else
+# Use a different module
+coreboot_toolchain_module := coreboot-$($(coreboot_module)_toolchain)
+modules-y += $(coreboot_toolchain_module)
+# The toolchain module won't build anything for this board, we just need
+# the module prepped so we can hook up the toolchain target
+$(coreboot_toolchain_module)_output := .nobuild
+$(coreboot_toolchain_module)_configure := printf 'all:\n\ttouch .nobuild\n' > Makefile.nobuild
+$(coreboot_toolchain_module)_target := -f Makefile.nobuild
+endif
+
+$(coreboot_module)_configure := \
+	mkdir -p "$(build)/$(coreboot_dir)"; \
+	if [ -f "$(build)/$(coreboot_dir)/coreboot.rom" ]; then \
+		initrd_hash=$$(sha256sum $(build)/$(BOARD)/initrd.cpio.xz | cut -d' ' -f1); \
+		if [ ! -f "$(build)/$(coreboot_dir)/.initrd_hash" ] || [ "$$(cat $(build)/$(coreboot_dir)/.initrd_hash)" != "$$initrd_hash" ]; then \
+			echo "INFO: initrd changed, cleaning coreboot board build dir to force rebuild with new version string"; \
+			rm -rf $(build)/$(coreboot_dir)/*; \
+			echo "$$initrd_hash" > $(build)/$(coreboot_dir)/.initrd_hash; \
+		fi; \
+	fi; \
+	$(call install_config,$(pwd)/$(CONFIG_COREBOOT_CONFIG),$(build)/$(coreboot_dir)/.config); \
+	sed -i '/^CONFIG_LOCALVERSION/d' $(build)/$(coreboot_dir)/.config; \
+	echo 'CONFIG_LOCALVERSION=$(CONFIG_COREBOOT_LOCALVERSION)' >> $(build)/$(coreboot_dir)/.config; \
+	sed -i '/^CONFIG_MAINBOARD_SMBIOS_PRODUCT_NAME/d' $(build)/$(coreboot_dir)/.config; \
+	echo 'CONFIG_MAINBOARD_SMBIOS_PRODUCT_NAME="$(CONFIG_COREBOOT_SMBIOS_PRODUCT_NAME)"' >> $(build)/$(coreboot_dir)/.config; \
+	if [ ! -z "$(CONFIG_COREBOOT_SMBIOS_MANUFACTURER)" ]; then \
+		sed -i '/^CONFIG_MAINBOARD_SMBIOS_MANUFACTURER/d' $(build)/$(coreboot_dir)/.config; \
+		echo 'CONFIG_MAINBOARD_SMBIOS_MANUFACTURER="$(CONFIG_COREBOOT_SMBIOS_MANUFACTURER)"' >> $(build)/$(coreboot_dir)/.config; \
+	fi; \
+	$(MAKE) olddefconfig \
+		-C "$(build)/$(coreboot_base_dir)" \
+		obj="$(build)/$(coreboot_dir)" \
+		DOTCONFIG="$(build)/$(coreboot_dir)/.config" \
+		BUILD_TIMELESS=1; \
+	echo ""; \
+	echo "Validating CONFIG_CBFS_SIZE vs IFD BIOS region..."; \
+	$(pwd)/bin/validate_cbfs_ifd_fit.sh \
+		--coreboot-dir "$(build)/$(coreboot_dir)" \
+		--board-dir "$(build)/$(BOARD)" \
+		--config "$(pwd)/$(CONFIG_COREBOOT_CONFIG)" \
+		|| exit 1; \
+	echo ""
+
+# Create a dependency from coreboot to the toolchain.  Use .heads-toolchain to
+# mark that the toolchain was built.
+COREBOOT_TOOLCHAIN_DIR=$(build)/$($(coreboot_toolchain_module)_base_dir)
+$(COREBOOT_TOOLCHAIN_DIR)/.heads-toolchain: $(COREBOOT_TOOLCHAIN_DIR)/.canary
+	$(MAKE) -C "$(build)/$($(coreboot_toolchain_module)_base_dir)" CPUS=$(CPUS) "crossgcc-$(COREBOOT_TARGET)" \
+		$($(coreboot_toolchain_module)_toolchain_build_args)
+	touch "$@"
+
+$(build)/$(coreboot_dir)/.configured: $(COREBOOT_TOOLCHAIN_DIR)/.heads-toolchain
+
+## Toolchain packages ##
+# coreboot likes to download its own toolchain packages, but these sources can
+# go down or move also.  Download them ahead of the toolchain build with
+# fetch_source_archive.sh to leverage our mirrors.
+#
+# Create a task for each package.
+# $1 - package name (binutils/gcc/gmp/etc. - check coreboot/util/crossgcc/sum/)
+define coreboot-toolchain-pkg =
+# The package versions and digests aren't duplicated here, we get them
+# from the coreboot source.  This means downloading all packages
+# requires unpacking the coreboot source, but that's preferred over
+# maintaining a duplicate list here for each coreboot version.
+
+# Rule to download the source archive for $1 and place it in the
+# cooreboot directory.  Although there is a specific file produced here
+# (the package), we can't use it as the rule target because we don't
+# know the filename until coreboot is unpacked.
+$(COREBOOT_TOOLCHAIN_DIR)/.heads-crossgcc-pkg-$(1) : $(COREBOOT_TOOLCHAIN_DIR)/.canary
+	WGET="$(WGET)" bin/fetch_coreboot_crossgcc_archive.sh \
+		"$(COREBOOT_TOOLCHAIN_DIR)" "$(1)" "$(packages)"
+	touch "$$@"
+
+# The toolchain build requires this package
+$(COREBOOT_TOOLCHAIN_DIR)/.heads-toolchain: $(COREBOOT_TOOLCHAIN_DIR)/.heads-crossgcc-pkg-$(1)
+# The "packages" target depends on this target, so 'make packages' will
+# include these packages for seeding a mirror.
+packages: $(COREBOOT_TOOLCHAIN_DIR)/.heads-crossgcc-pkg-$(1)
+endef
+
+$(eval $(call coreboot-toolchain-pkg,gmp))
+$(eval $(call coreboot-toolchain-pkg,mpfr))
+$(eval $(call coreboot-toolchain-pkg,mpc))
+$(eval $(call coreboot-toolchain-pkg,binutils))
+$(eval $(call coreboot-toolchain-pkg,gcc))
+$(eval $(call coreboot-toolchain-pkg,nasm))
+$(eval $(call coreboot-toolchain-pkg,iasl))
+
+# Build with the cross toolchain from the toolchain module (which might be the
+# same coreboot module or a different one).
+$(coreboot_module)_target := \
+	-C "$(build)/$(coreboot_base_dir)" \
+	obj="$(build)/$(coreboot_dir)" \
+	DOTCONFIG="$(build)/$(coreboot_dir)/.config" \
+	XGCCPATH="$(build)/$($(coreboot_toolchain_module)_base_dir)/util/crossgcc/xgcc/bin/" \
+	$(COREBOOT_TARGET_CROSS) \
+	BUILD_TIMELESS=1 \
+	$(MAKE_JOBS)
+
+$(coreboot_module)_output := $(CONFIG_COREBOOT_ROM)
+$(coreboot_module)_output += $(CONFIG_COREBOOT_BOOTBLOCK)
+
+# Force a rebuild if the inputs have changed
+$(build)/$(coreboot_dir)/.build: \
+	$(build)/$(BOARD)/$(LINUX_IMAGE_FILE) \
+	$(build)/$(BOARD)/initrd.cpio.xz \
+
+# This produces a ROM image that is written with the flashrom program
+ifneq ($(CONFIG_COREBOOT),)
+
+# Let make rebuild the ROM only when inputs change; downstream logic
+# will ensure expensive post-processing (like GPG injection) is skipped when up-to-date.
+$(build)/$(BOARD)/$(CB_OUTPUT_FILE): $(build)/$(coreboot_dir)/.build
+	# Use coreboot.rom, because custom output files might not be processed by cbfstool
+	"$(build)/$(coreboot_dir)/cbfstool" "$(dir $<)coreboot.rom" print
+	@echo ""
+	@echo "Validating final CBFS/IFD configuration..."
+	@$(pwd)/bin/validate_cbfs_ifd_fit.sh \
+		--coreboot-dir "$(build)/$(coreboot_dir)" \
+		--board-dir "$(build)/$(BOARD)" \
+		--config "$(pwd)/$(CONFIG_COREBOOT_CONFIG)" || exit 1
+	@echo ""
+	$(call do-copy,$(dir $<)$(CONFIG_COREBOOT_ROM),$@)
+	@touch $@   # update the time stamp
+
+ifneq ($(CONFIG_COREBOOT_BOOTBLOCK),)
+$(build)/$(BOARD)/$(CB_BOOTBLOCK_FILE): $(build)/$(coreboot_dir)/.build
+	$(call do-copy,$(dir $<)$(CONFIG_COREBOOT_BOOTBLOCK),$@)
+	@touch $@   # update the time stamp
+endif
+
+endif
+
+#
+# Helpful target for reconfiguring the coreboot target
+#
+coreboot.save_in_defconfig_format_in_place:
+	mkdir -p "$(build)/$(coreboot_dir)" && \
+	cp "$(pwd)/$(CONFIG_COREBOOT_CONFIG)" "$(build)/$(coreboot_dir)/.config" && \
+	$(MAKE) \
+		-C "$(build)/$(coreboot_base_dir)" \
+		DOTCONFIG="$(build)/$(coreboot_dir)/.config" \
+		olddefconfig && \
+	$(MAKE) \
+		-C "$(build)/$(coreboot_base_dir)" \
+		DOTCONFIG="$(build)/$(coreboot_dir)/.config" \
+		savedefconfig && \
+	mv "$(build)/$(coreboot_base_dir)/defconfig" "$(pwd)/$(CONFIG_COREBOOT_CONFIG)"
+
+coreboot.save_in_oldconfig_format_in_place:
+	mkdir -p "$(build)/$(coreboot_dir)" && \
+	cp "$(pwd)/$(CONFIG_COREBOOT_CONFIG)" "$(build)/$(coreboot_dir)/.config" && \
+	$(MAKE) \
+		-C "$(build)/$(coreboot_base_dir)" \
+		DOTCONFIG="$(build)/$(coreboot_dir)/.config" \
+		olddefconfig \
+	&& mv "$(build)/$(coreboot_dir)/.config" "$(pwd)/$(CONFIG_COREBOOT_CONFIG)"
+
+coreboot.save_in_defconfig_format_backup:
+	mkdir -p "$(build)/$(coreboot_dir)" && \
+	cp "$(pwd)/$(CONFIG_COREBOOT_CONFIG)" "$(build)/$(coreboot_dir)/.config" && \
+	$(MAKE) \
+		-C "$(build)/$(coreboot_base_dir)" \
+		DOTCONFIG="$(build)/$(coreboot_dir)/.config" \
+		savedefconfig && \
+	cp "$(build)/$(coreboot_base_dir)/defconfig" "$(pwd)/$(CONFIG_COREBOOT_CONFIG)_defconfig"
+
+coreboot.modify_defconfig_in_place:
+	mkdir -p "$(build)/$(coreboot_dir)" && \
+	cp "$(pwd)/$(CONFIG_COREBOOT_CONFIG)" "$(build)/$(coreboot_dir)/.config" && \
+	$(MAKE) \
+		-C "$(build)/$(coreboot_base_dir)" \
+		DOTCONFIG="$(build)/$(coreboot_dir)/.config" \
+		menuconfig \
+	&& $(MAKE) \
+		-C "$(build)/$(coreboot_base_dir)" \
+		DOTCONFIG="$(build)/$(coreboot_dir)/.config" \
+		DEFCONFIG="$(pwd)/$(CONFIG_COREBOOT_CONFIG)" \
+		savedefconfig
+
+coreboot.modify_and_save_oldconfig_in_place:
+	mkdir -p "$(build)/$(coreboot_dir)" && \
+	$(MAKE) menuconfig \
+		-C "$(build)/$(coreboot_base_dir)" \
+		obj="$(build)/$(coreboot_dir)" \
+		DOTCONFIG="$(pwd)/$(CONFIG_COREBOOT_CONFIG)"
+
+# if we are not building from a git checkout,
+# we must also download the coreboot-blobs tree
+ifeq "$($(coreboot_module)_repo)" ""
+
+coreboot-blobs_module := coreboot-blobs-$(CONFIG_COREBOOT_VERSION)
+
+$(coreboot_module)_depends += $(coreboot-blobs_module)
+modules-y += $(coreboot-blobs_module)
+
+## there is nothing to build for the blobs, this should be
+## made easier to make happen
+$(coreboot-blobs_module)_output := .built
+$(coreboot-blobs_module)_configure := echo -e 'all:\n\ttouch .built' > Makefile
+
+endif
+endif

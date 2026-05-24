@@ -1,0 +1,40 @@
+modules-$(CONFIG_CAIRO) += cairo
+
+cairo_version := 1.14.12
+cairo_dir := cairo-$(cairo_version)
+cairo_tar := cairo-$(cairo_version).tar.xz
+cairo_url := https://www.cairographics.org/releases/$(cairo_tar)
+cairo_hash := 8c90f00c500b2299c0a323dd9beead2a00353752b2092ead558139bd67f7bf16
+
+cairo_configure := \
+	CFLAGS="-DCAIRO_NO_MUTEX=1 -Os"  \
+	$(CROSS_TOOLS) \
+	./configure \
+	--host $(MUSL_ARCH)-elf-linux \
+	--prefix="/" \
+	--disable-fc \
+	--disable-ft \
+	--disable-gobject \
+	--disable-pdf \
+	--disable-ps \
+	--disable-pthread \
+	--disable-script \
+	--disable-svg \
+	--disable-xcb \
+	--disable-xlib \
+	&& sed \
+		-e 's/^hardcode_libdir_flag_spec.*/hardcode_libdir_flag_spec=" -D__LIBTOOL_RPATH_DISABLE__ "/' \
+		< libtool \
+		> libtool-2 \
+	&& mv libtool-2 libtool \
+	&& chmod 755 libtool
+
+cairo_target := \
+	$(MAKE_JOBS) \
+	$(CROSS_TOOLS) \
+	DESTDIR="$(INSTALL)" \
+	install
+
+cairo_libraries := src/.libs/libcairo.so.2
+
+cairo_depends := pixman $(musl_dep)

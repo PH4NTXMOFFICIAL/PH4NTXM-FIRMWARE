@@ -1,0 +1,56 @@
+modules-$(CONFIG_GPG2) += gpg2
+
+gpg2_version := 2.4.0
+gpg2_dir := gnupg-$(gpg2_version)
+gpg2_tar := gnupg-$(gpg2_version).tar.bz2
+gpg2_url := https://www.gnupg.org/ftp/gcrypt/gnupg/$(gpg2_tar)
+gpg2_hash := 1d79158dd01d992431dd2e3facb89fdac97127f89784ea2cb610c600fb0c1483
+gpg2_depends := libgpg-error libgcrypt libksba libassuan npth libusb $(musl_dep)
+
+# For reproducibility reasons we have to override the exec_prefix
+# and datarootdir on the configure line so that the Makefiles will
+# be generated with the correct paths, but then re-write them when
+# we use the install target so that they will be copied to the correct
+# location.
+gpg2_configure := \
+	$(CROSS_TOOLS) \
+	CFLAGS="-Os"  \
+	./configure \
+	CPPFLAGS="-I$(INSTALL)/include/libusb-1.0" \
+	--host $(MUSL_ARCH)-linux-musl \
+	--prefix "/" \
+	--libexecdir "/bin" \
+	--disable-all-tests \
+	--disable-bzip2 \
+	--disable-dirmngr \
+	--disable-doc \
+	--disable-exec \
+	--disable-gnutls \
+	--disable-gpgsm \
+	--disable-ldap \
+	--disable-libdns \
+	--disable-nls \
+	--disable-ntbtls \
+	--disable-photo-viewers \
+	--disable-rpath \
+	--disable-sqlite \
+	--disable-tofu \
+	--disable-wks-tools \
+	--disable-zip \
+	--enable-ccid-driver \
+	--enable-scdaemon \
+	--with-gpg-error-prefix="$(INSTALL)" \
+	--with-ksba-prefix="$(INSTALL)" \
+	--with-libassuan-prefix="$(INSTALL)" \
+	--with-libgcrypt-prefix="$(INSTALL)" \
+	--with-npth-prefix="$(INSTALL)" \
+
+# Run one build to generate the executables with the pre-defined
+# exec_prefix and datarootdir, then a second make to install the binaries
+# into our actual target location
+gpg2_target := $(MAKE_JOBS) \
+	&& $(MAKE) -C $(build)/$(gpg2_dir) \
+		DESTDIR="$(INSTALL)" \
+		install
+
+gpg2_output := g10/gpg agent/gpg-agent scd/scdaemon

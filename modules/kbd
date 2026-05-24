@@ -1,0 +1,43 @@
+# kbd: Linux keyboard tools
+#
+# Provides:
+# - setfont - set the Linux console font
+# - loadkeys - load a key map for the Linux console (CONFIG_KBD_LOADKEYS)
+#
+# To also provide showkey and dumpkeys (normally only needed for development),
+# set CONFIG_KBD_DEVTOOLS=y.
+modules-$(CONFIG_KBD) += kbd
+
+kbd_version := 2.6.1
+kbd_dir := kbd-$(kbd_version)
+kbd_tar := kbd-$(kbd_version).tar.gz
+kbd_url := https://www.kernel.org/pub/linux/utils/kbd/$(kbd_tar)
+kbd_hash := aaed530a1490d63d041448372e2ad4f38c3179042903251000b71d527c46e945
+
+kbd_configure := CFLAGS=-Os ./configure \
+	$(CROSS_TOOLS) \
+	--host i386-elf-linux \
+	--prefix "" \
+	--disable-libkeymap \
+	--disable-libkfont \
+	--disable-optional-progs \
+	--disable-vlock \
+
+kbd_target := \
+	$(MAKE_JOBS) $(CROSS_TOOLS)
+
+kbd_output := \
+	src/setfont
+
+ifeq "$(CONFIG_KBD_LOADKEYS)" "y"
+	kbd_output += src/loadkeys
+endif
+
+ifeq "$(CONFIG_KBD_EXTRATOOLS)" "y"
+	kbd_output += src/showkey src/dumpkeys
+endif
+
+kbd_depends := $(musl_dep)
+
+kbd_data += \
+	$(build)/$(kbd_dir)/data/keymaps|usr/lib/kbd/keymaps

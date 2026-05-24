@@ -1,0 +1,1 @@
+../doc/variation-to-defconfig.md

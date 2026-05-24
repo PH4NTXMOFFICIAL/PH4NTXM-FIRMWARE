@@ -1,0 +1,30 @@
+modules-$(CONFIG_FLASHTOOLS) += flashtools
+
+flashtools_depends := $(musl_dep)
+
+flashtools_version := d1e6f12568cb23387144a4b7a6535fe1bc1e79b1
+flashtools_dir := flashtools-$(flashtools_version)
+flashtools_tar := flashtools-$(flashtools_version).tar.gz
+flashtools_url := https://github.com/osresearch/flashtools/archive/$(flashtools_version).tar.gz
+flashtools_hash := a68cdb4a2e312f96862119a6d829ac900b53d0cbc80caa5632efd43b5b7eed6c
+
+flashtools_target := \
+	$(CROSS_TOOLS) \
+	$(MAKE_JOBS) \
+	CFLAGS="-Os -I$(INSTALL)/include" \
+	LDFLAGS="-L$(INSTALL)/lib" \
+
+flashtools_output := \
+	flashtool \
+	peek \
+	poke \
+	cbfs \
+	uefi \
+
+ifeq "$(CONFIG_TARGET_ARCH)" "ppc64"
+flashtools_output += pnor
+endif
+
+flashtools_libraries := \
+
+flashtools_configure := 

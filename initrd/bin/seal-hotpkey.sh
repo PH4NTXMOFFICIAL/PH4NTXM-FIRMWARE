@@ -1,0 +1,265 @@
+#!/bin/bash
+# Retrieve the sealed TOTP secret and initialize a USB Security dongle with it
+
+. /etc/functions.sh
+. /etc/gui_functions.sh
+
+HOTP_SECRET="/tmp/secret/hotp.key"
+HOTP_COUNTER="/boot/kexec_hotp_counter"
+
+mount_boot() {
+	TRACE_FUNC
+	# Mount local disk if it is not already mounted
+	if ! grep -q /boot /proc/mounts; then
+		if ! mount -o ro /boot; then
+			whiptail_error --title 'ERROR' \
+				--msgbox "Couldn't mount /boot.\n\nCheck the /boot device in configuration settings, or perform an OEM reset." 0 80
+			return 1
+		fi
+	fi
+}
+
+TRACE_FUNC
+
+if [ "$CONFIG_TPM" = "y" ]; then
+	DEBUG "Sealing HOTP secret reuses TOTP sealed secret..."
+	STATUS "Unsealing HOTP secret from TPM"
+	tpmr.sh unseal 4d47 0,1,2,3,4,7 312 "$HOTP_SECRET" ||
+		DIE "Unable to unseal HOTP secret"
+	STATUS_OK "HOTP secret unsealed from TPM"
+else
+	# without a TPM, generate a secret based on the SHA-256 of the ROM
+	STATUS "Deriving HOTP secret from ROM hash"
+	secret_from_rom_hash >"$HOTP_SECRET" || DIE "Reading ROM failed"
+	STATUS_OK "HOTP secret derived from ROM hash"
+fi
+
+# Store counter in file instead of TPM for now, as it conflicts with Heads
+# config TPM counter as TPM 1.2 can only increment one counter between reboots
+# get current value of HOTP counter in TPM, create if absent
+mount_boot || exit 1
+
+#check_tpm_counter $HOTP_COUNTER hotp \
+#|| DIE "Unable to find/create TPM counter"
+#counter="$TPM_COUNTER"
+#
+#counter_value=$(read_tpm_counter $counter | cut -f2 -d ' ' | awk 'gsub("^000e","")')
+#if [ "$counter_value" == "" ]; then
+#  DIE "Unable to read HOTP counter"
+#fi
+
+#counter_value=$(printf "%d" 0x${counter_value})
+
+counter_value=1
+
+# HOTP configuration requires USB token access.
+STATUS "Preparing USB security dongle access for HOTP configuration"
+enable_usb
+# Detect branding from current USB state
+detect_usb_security_dongle_branding
+DEBUG "$DONGLE_BRAND detected via USB VID:PID"
+STATUS_OK "$DONGLE_BRAND detection ready for HOTP configuration"
+
+TRACE_FUNC
+
+# Make sure no conflicting GPG related services are running, gpg-agent will respawn
+DO_WITH_DEBUG killall gpg-agent scdaemon >/dev/null 2>&1 || true
+
+# Query hotp_verification info and extract numeric PIN retry counter.
+# Retries up to N times on communication failure.  Dies if the dongle
+# is present but no numeric counter can be extracted.
+query_pin_retries() {
+	local var_name="$1" dongle="$2" max="${3:-3}"
+	local attempt=0 info counter
+	while [ $attempt -lt "$max" ]; do
+		attempt=$((attempt + 1))
+		info="$(hotp_verification info 2>/dev/null)" || true
+		echo "$info" | grep -q "Connected device status:" || continue
+		HOTP_TOKEN_INFO="$info"
+		if [ "$dongle" = "Nitrokey 3" ]; then
+			counter=$(echo "$info" | grep "Secrets app PIN counter:" | grep -o '[0-9][0-9]*')
+		else
+			counter=$(echo "$info" | grep "Card counters: Admin" | grep -o 'Admin [0-9]*' | grep -o '[0-9]*')
+		fi
+		if [ -n "$counter" ]; then
+			eval "$var_name=\$counter"
+			return 0
+		fi
+		# Dongle is present but counter is missing — slot not configured.
+		DIE "$DONGLE_BRAND HOTP slot is not configured"
+	done
+	eval "$var_name="
+	return 1
+}
+
+# Initial query — if the dongle is not responding, prompt for reinsertion
+# and retry once.
+STATUS "Checking $DONGLE_BRAND presence for HOTP setup"
+if ! query_pin_retries admin_pin_retries "$DONGLE_BRAND" 1; then
+	INPUT "Insert your $DONGLE_BRAND and press Enter to configure it"
+	if ! query_pin_retries admin_pin_retries "$DONGLE_BRAND" 1; then
+		shred -n 10 -z -u "$HOTP_SECRET" 2>/dev/null
+		DIE "Unable to communicate with $DONGLE_BRAND"
+	fi
+fi
+STATUS_OK "$DONGLE_BRAND is present for HOTP setup"
+
+# Re-detect branding now that the dongle is confirmed present.
+detect_usb_security_dongle_branding
+DEBUG "$DONGLE_BRAND detected via USB VID:PID"
+
+# Truncate the secret if it is longer than the maximum HOTP secret
+truncate_max_bytes 20 "$HOTP_SECRET"
+
+TRACE_FUNC
+
+# Check when the signing key was created to consider trying the default PIN
+# (Note: we must avoid using gpg --card-status here as the Nitrokey firmware
+# locks up, https://github.com/Nitrokey/nitrokey-pro-firmware/issues/54)
+gpg_key_create_time="$(gpg --list-keys --with-colons | grep -m 1 '^pub:' | cut -d: -f6)"
+gpg_key_create_time="${gpg_key_create_time:-0}"
+DEBUG "Signature key was created at $(date -d "@$gpg_key_create_time")"
+now_date="$(date '+%s')"
+
+# Get the number of HOTP related PIN retry attempts remaining.
+# NK3 uses "Secrets app PIN counter" (factory default: 8 attempts);
+# all pre-NK3 devices use "Card counters: Admin" (factory default: 3 attempts).
+if [ "$DONGLE_BRAND" = "Nitrokey 3" ]; then
+	prompt_message="Secrets app"
+else
+	prompt_message="GPG Admin"
+fi
+DEBUG "HOTP related PIN retry counter is $admin_pin_retries"
+# Show dongle firmware version with color coding so users know when to upgrade
+hotpkey_fw_display "$HOTP_TOKEN_INFO" "$DONGLE_BRAND"
+
+# Re-query and display the current PIN retry counter before each manual prompt.
+# prompt_message is already set for the device type (NK3 vs older), reuse it.
+show_pin_retries() {
+	query_pin_retries admin_pin_retries "$DONGLE_BRAND" 3
+	STATUS "$DONGLE_BRAND ${prompt_message} PIN retries remaining: $(pin_color "$admin_pin_retries")${admin_pin_retries}\033[0m"
+}
+
+# Try using factory default admin PIN for 1 month following OEM reset to ease
+# initial setup.  But don't do it forever to encourage changing the PIN and
+# so PIN attempts are not consumed by the default attempt.
+admin_pin="12345678"
+month_secs="$((30 * 24 * 60 * 60))"
+admin_pin_status=1
+if [ "$((now_date - gpg_key_create_time))" -gt "$month_secs" ]; then
+	# Remind what the default PIN was in case it still hasn't been changed
+	DEBUG "Not trying default PIN ($admin_pin)"
+# Never consume an attempt if there are less than 3 attempts left, otherwise
+# attempting the default PIN could cause an unexpected lockout before getting a
+# chance to enter the correct PIN
+elif [ "$admin_pin_retries" -lt 3 ]; then
+	DEBUG "Not trying default PIN ($admin_pin): only $admin_pin_retries attempt(s) left"
+else
+	STATUS "Trying ${prompt_message} PIN to seal HOTP secret on $DONGLE_BRAND"
+	# NK3 requires physical touch confirmation for the initialize operation
+	if [ "$DONGLE_BRAND" = "Nitrokey 3" ]; then
+		NOTE "Nitrokey 3 requires physical presence: touch the dongle when prompted"
+	fi
+	#TODO: silence the output of hotp_initialize once https://github.com/Nitrokey/nitrokey-hotp-verification/issues/41 is fixed
+	#hotp_initialize "$admin_pin" $HOTP_SECRET $counter_value "$DONGLE_BRAND" >/dev/null 2>&1
+	STATUS "Writing HOTP secret to $DONGLE_BRAND"
+	hotp_initialize "$admin_pin" $HOTP_SECRET $counter_value "$DONGLE_BRAND"
+	admin_pin_status="$?"
+	if [ "$admin_pin_status" -eq 0 ]; then
+		STATUS_OK "HOTP secret written to $DONGLE_BRAND"
+	fi
+fi
+
+if [ "$admin_pin_status" -ne 0 ]; then
+
+	# If the default PIN was tried and failed, we consumed 1 attempt.
+	# Re-read the counter and limit user attempts accordingly.
+	# Leave at least 1 attempt unconsumed to avoid accidental lockout.
+	#
+	# max_attempts calculation:
+	# - Read current retry counter (may be lower if default PIN consumed 1)
+	# - Subtract 1 to preserve one final attempt for the user
+	# - Cap at 3 to match the pre-NK3 factory default, so the user experience
+	#   is consistent regardless of device.
+	# - If the counter read is unreliable (0 or 1), fall back to 3 attempts
+	#   so the user is never blocked from sealing.
+	#
+	# Example outcomes for NK3 (factory default: 8):
+	#   Default PIN skipped (key >1 month old)        -> max_attempts = min(8-1, 3) = 3
+	#   Default PIN tried & failed (8 -> 7 remaining) -> max_attempts = min(7-1, 3) = 3
+	#   Default PIN tried & failed (4 -> 3 remaining) -> max_attempts = min(3-1, 3) = 2
+	#   Default PIN tried & failed (2 -> 1 remaining) -> max_attempts = 3 (fallback, don't block)
+	#   Counter read failed (0 or empty)              -> max_attempts = 3 (fallback, don't block)
+	#
+	# Example outcomes for pre-NK3 (factory default: 3):
+	#   Default PIN skipped (key >1 month old)        -> max_attempts = min(3-1, 3) = 2
+	#   Default PIN tried & failed (3 -> 2 remaining) -> max_attempts = min(2-1, 3) = 1
+	#   Counter read failed (0 or empty)              -> max_attempts = 3 (fallback, don't block)
+	# Re-read counter without displaying (loop will show it).
+	query_pin_retries admin_pin_retries "$DONGLE_BRAND" 1
+	if [ -n "$admin_pin_retries" ] && [ "$admin_pin_retries" -ge 2 ]; then
+		max_attempts=$((admin_pin_retries - 1))
+		[ "$max_attempts" -gt 3 ] && max_attempts=3
+	else
+		max_attempts=3
+	fi
+
+	# prompt user for PIN; re-query counter before each attempt so the user
+	# sees the decremented count after a wrong PIN (same pattern as kexec-sign-config.sh)
+	for tries in $(seq 1 $max_attempts); do
+		show_pin_retries
+		if [ "$tries" -eq 1 ]; then
+			INPUT "Enter your $DONGLE_BRAND ${prompt_message} PIN (attempt $tries/$max_attempts):" -r -s admin_pin
+		else
+			INPUT "Wrong PIN - re-enter your $DONGLE_BRAND ${prompt_message} PIN (attempt $tries/$max_attempts):" -r -s admin_pin
+		fi
+		if hotp_initialize "$admin_pin" $HOTP_SECRET $counter_value "$DONGLE_BRAND"; then
+			break
+		fi
+		if [ "$tries" -eq "$max_attempts" ]; then
+			# don't leak key on failure
+			shred -n 10 -z -u "$HOTP_SECRET" 2>/dev/null
+			case "$DONGLE_BRAND" in
+			"Nitrokey 3")
+				DIE "Setting HOTP secret on $DONGLE_BRAND failed after $max_attempts attempts. To reset ${prompt_message} PIN: redo Re-Ownership, or use Nitrokey App 2, or contact Nitrokey support."
+				;;
+			"Nitrokey Pro" | "Nitrokey Storage")
+				DIE "Setting HOTP secret on $DONGLE_BRAND failed after $max_attempts attempts. To reset GPG Admin PIN: redo Re-Ownership, or use Nitrokey App 2, or contact Nitrokey support."
+				;;
+			"Librem Key")
+				DIE "Setting HOTP secret on $DONGLE_BRAND failed after $max_attempts attempts. To reset GPG Admin PIN: redo Re-Ownership or contact Purism support."
+				;;
+			*)
+				DIE "Setting HOTP secret failed after $max_attempts attempts"
+				;;
+			esac
+		fi
+	done
+else
+	# Default PIN was accepted — security reminder, not a fatal error.
+	# NOTE prints blank lines before/after and is always visible; no INPUT needed.
+	NOTE "Default ${prompt_message} PIN detected.  Change it via Options --> OEM Factory Reset / Re-Ownership."
+fi
+
+# HOTP key no longer needed
+shred -n 10 -z -u "$HOTP_SECRET" 2>/dev/null
+
+# Make sure our counter is incremented ahead of the next check
+#increment_tpm_counter $counter > /dev/null \
+#|| DIE "Unable to increment tpm counter"
+#increment_tpm_counter $counter > /dev/null \
+#|| DIE "Unable to increment tpm counter"
+
+mount -o remount,rw /boot
+
+counter_value=$(expr $counter_value + 1)
+echo $counter_value >$HOTP_COUNTER ||
+	DIE "Unable to create hotp counter file"
+
+#sha256sum /tmp/counter-$counter > $HOTP_COUNTER \
+#|| DIE "Unable to create hotp counter file"
+mount -o remount,ro /boot
+
+STATUS_OK "$DONGLE_BRAND initialized successfully"
+
+exit 0

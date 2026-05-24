@@ -1,0 +1,27 @@
+modules-$(CONFIG_NEWT) += newt
+
+newt_depends := popt slang ncurses $(musl_dep)
+
+newt_version := 0.52.24
+newt_dir := newt-$(newt_version)
+newt_tar := newt-$(newt_version).tar.gz
+newt_url := https://releases.pagure.org/newt/$(newt_tar)
+newt_hash := 5ded7e221f85f642521c49b1826c8de19845aa372baf5d630a51774b544fbdbb
+
+newt_target := \
+	#We remove Makefile passed number of jobs to only pass one job, otherwise fails to build
+	#$(MAKE_JOBS) \
+	$(CROSS_TOOLS) \
+
+newt_output := \
+	whiptail \
+
+newt_libraries := \
+	libnewt.so.0.52 \
+
+newt_configure := \
+	./autogen.sh && CFLAGS="-Os" ./configure \
+	$(CROSS_TOOLS) \
+	--host $(MUSL_ARCH)-elf-linux \
+	--prefix "/" \
+	--without-tcl

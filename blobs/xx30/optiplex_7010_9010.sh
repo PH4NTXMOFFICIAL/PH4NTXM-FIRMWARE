@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib.sh"
+
+EC_BLOB_HASH=20060eba91367b71a21c7757271ac642fa0376809f8c1b51066510246ac97bdb
+ACM_BLOB_HASH=b00d10f6615cf1b28f4fb4adac6631bf6e332db524e45dfafb92e539767d22a0
+SINIT_BLOB_HASH=1e888aebc78d637d119c489adffa95387b53429125dc3ad61f10a5cad0496834
+
+output_dir="$(realpath "${1:-./}")"
+
+check_outputs \
+	"${EC_BLOB_HASH} ${output_dir}/sch5545_ecfw.bin" \
+	"${ACM_BLOB_HASH} ${output_dir}/IVB_BIOSAC_PRODUCTION.bin" \
+	"${SINIT_BLOB_HASH} ${output_dir}/SNB_IVB_SINIT_20190708_PW.bin" && { echo "All outputs match. Nothing to do."; exit 0; }
+
+    # Unpack Dell's Windows installer into a temporary directory and
+    # extract the EC and ACM blobs
+
+    pushd "$(mktemp -d)" || exit
+
+    #Download Dell firmware update package
+    wget --user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36" https://dl.dell.com/FOLDER05066036M/1/O7010A29.exe \
+	    ||  wget https://web.archive.org/web/20241007124946/https://dl.dell.com/FOLDER05066036M/1/O7010A29.exe
+
+    #Extract binary
+    binwalk -e O7010A29.exe -C . --run-as=root
+
+    #Extract blobs
+    #uefi-firmware-parser -e "_O7010A29.exe.extracted/65C10" -O
+    uefi-firmware-parser -b "_O7010A29.exe.extracted/65C10" -e -o extract
+
+    #EC
+    cp ./extract/volume-327768/file-d386beb8-4b54-4e69-94f5-06091f67e0d3/section0.raw sch5545_ecfw.bin
+    
+    mv sch5545_ecfw.bin "${output_dir}/"
+
+    #ACM
+    cp ./extract/volume-5242968/file-2d27c618-7dcd-41f5-bb10-21166be7e143/object-0.raw IVB_BIOSAC_PRODUCTION.bin
+    mv IVB_BIOSAC_PRODUCTION.bin "${output_dir}/"
+
+    #Download sinit
+    if wget https://dl.3mdeb.com/mirror/intel/acm/SNB_IVB_SINIT_20190708_PW.bin -O "${output_dir}/SNB_IVB_SINIT_20190708_PW.bin"; then
+      # As per https://github.com/Dasharo/dasharo-issues/issues/1283#issuecomment-3178940096 : use 3mdeb's intel mirror for sinit blob
+      popd || exit
+    # Original URL got rid of needed file, keeping original URL. Let's use archive.org
+    #wget https://cdrdv2.intel.com/v1/dl/getContent/630744 -O sinit.zip
+    elif wget http://web.archive.org/web/20230712081031/https://cdrdv2.intel.com/v1/dl/getContent/630744 -O sinit.zip; then
+      unzip sinit.zip
+      mv 630744_002/SNB_IVB_SINIT_20190708_PW.bin "${output_dir}/"
+      popd || exit
+    else
+      echo "Can't download sinit blob, failing"
+      exit 1
+    fi
+
+check_outputs \
+	"${EC_BLOB_HASH} ${output_dir}/sch5545_ecfw.bin" \
+	"${ACM_BLOB_HASH} ${output_dir}/IVB_BIOSAC_PRODUCTION.bin" \
+	"${SINIT_BLOB_HASH} ${output_dir}/SNB_IVB_SINIT_20190708_PW.bin" || exit 1
+

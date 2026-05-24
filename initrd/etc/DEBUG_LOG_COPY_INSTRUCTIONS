@@ -1,0 +1,13 @@
+Welcome to the Recovery Shell!
+
+- /tmp/debug.log: detailed runtime logs in all output modes.
+- /tmp/measuring_trace.log: INFO-level security/measurement log in all output modes.
+	- Read locally with:
+	  - 'less /tmp/debug.log'
+	  - 'less /tmp/measuring_trace.log'
+- If you hit a bug:
+	- Connect an ext3/ext4/fat32/exfat USB thumb drive, then run:
+	  - 'mount-usb.sh --mode rw' # mount USB read-write at /media
+	  - 'cp /tmp/debug.log /tmp/measuring_trace.log /media/' # copy both logs
+	  - 'umount /media' # flush writes and safely unmount
+- Share both log files with developers.

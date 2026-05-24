@@ -1,0 +1,43 @@
+modules-$(CONFIG_UTIL_LINUX) += util-linux
+
+util-linux_version := 2.39
+util-linux_dir := util-linux-$(util-linux_version)
+util-linux_tar := util-linux-$(util-linux_version).tar.xz
+util-linux_url := https://www.kernel.org/pub/linux/utils/util-linux/v2.39/$(util-linux_tar)
+util-linux_hash := 32b30a336cda903182ed61feb3e9b908b762a5e66fe14e43efb88d37162075cb
+
+util-linux_configure := \
+	$(CROSS_TOOLS) \
+	CFLAGS="-Os"  \
+	./configure \
+	--host $(MUSL_ARCH)-elf-linux \
+	--prefix "/" \
+	--oldincludedir "$(INSTALL)/include" \
+	--disable-all-programs \
+	--disable-bash-completion \
+	--enable-agetty \
+	--enable-libblkid \
+	--enable-libuuid \
+	--without-ncurses \
+	--without-ncursesw \
+	--without-python \
+	--without-tinfo \
+	--without-udev \
+
+
+util-linux_target := \
+	$(MAKE_JOBS) \
+	$(CROSS_TOOLS) \
+	DESTDIR="$(INSTALL)" \
+	install && \
+	rm $(INSTALL)/lib/libblkid.la && \
+	rm $(INSTALL)/lib/libuuid.la
+
+util-linux_libraries += \
+	.libs/libuuid.so.1 \
+	.libs/libblkid.so.1 \
+
+util-linux_agetty-$(CONFIG_USE_AGETTY) := agetty
+util-linux_output := $(util-linux_agetty-y)
+
+util-linux_depends := $(musl_dep)

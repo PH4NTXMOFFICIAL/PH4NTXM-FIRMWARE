@@ -1,0 +1,10 @@
+PH4NTXM Firmware Branding
+
+Derived from Heads/LinuxBoot/coreboot branding infrastructure.
+
+Original project:
+https://github.com/linuxboot/heads
+
+PH4NTXM modifications:
+- Custom branding
+- Custom bootsplash

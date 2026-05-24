@@ -1,0 +1,28 @@
+modules-$(CONFIG_NEWT) += ncurses
+
+ncurses_depends := $(musl_dep)
+
+ncurses_version := 6.5
+ncurses_dir := ncurses-$(ncurses_version)
+ncurses_tar := ncurses-$(ncurses_version).tar.gz
+ncurses_url := https://invisible-island.net/archives/ncurses/ncurses-$(ncurses_version).tar.gz
+ncurses_hash := 136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6
+
+ncurses_configure := \
+	CFLAGS="-Os" ./configure \
+	$(CROSS_TOOLS) \
+	--host $(MUSL_ARCH)-elf-linux \
+	--without-ada \
+	--without-cxx \
+	--without-cxx-binding \
+	--without-manpages \
+	--without-shared
+
+# Build and install ncurses data
+ncurses_target := $(MAKE_JOBS) \
+	$(CROSS_TOOLS) \
+	DESTDIR="$(INSTALL)" \
+	install.data
+
+# Specify terminfo file for data.cpio if ncurses is enabled
+ncurses_data += $(INSTALL)/usr/lib/terminfo/l/linux|etc/terminfo/l/linux
